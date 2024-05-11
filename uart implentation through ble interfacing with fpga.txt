@@ -1,0 +1,729 @@
+
+Skip to content
+Using Gmail with screen readers
+k 
+FPGA TERMWORK CODE WITH CONSTRAINT FILE
+Inbox
+
+kanchi sreekruthi
+Attachments
+Sat, 4 May, 16:09 (7 days ago)
+to kanchi, me
+
+
+--
+Best Regards,
+K. Sreekruthi
+Email Id: kanchisreekruthi.99@gmail.com
+One attachment
+  • Scanned by Gmail
+kanchisreekruthi.99@gmail.com. Press Tab to insert.
+//UART TEST
+module uart_test(
+    input clk_100MHz,       // basys 3 FPGA clock signal
+    input reset,            // btnR    
+    input rx,               // USB-RS232 Rx
+    input btn,              // btnL (read and write FIFO operation)
+    output tx,              // USB-RS232 Tx
+    output [3:0] an,        // 7 segment display digits
+    output [0:6] seg,       // 7 segment display segments
+    output [7:0] LED,    // data to Rx FIFO
+        output PMOD_2,
+        output PMOD_8,
+        input  PMOD_3        // data byte display
+    );
+    
+    // Connection Signals
+    wire rx_full, rx_empty, btn_tick;
+    wire [7:0] rec_data, rec_data1;
+    
+    assign tx_reg = PMOD_3;                 //Forward data from computer to the bluetooth transmitter
+    assign PMOD_2 = rx;
+    assign PMOD_8 =1'b1;                //Drive BT chip out of reset
+    
+    // Complete UART Core
+    uart_top UART_UNIT
+        (
+            .clk_100MHz(clk_100MHz),
+            .reset(reset),
+            .read_uart(btn_tick),
+            .write_uart(btn_tick),
+            .rx(rx),
+            .write_data(rec_data1),
+            .rx_full(rx_full),
+            .rx_empty(rx_empty),
+            .read_data(rec_data),
+            .tx(tx)
+        );
+    
+    // Button Debouncer
+    debounce_explicit BUTTON_DEBOUNCER
+        (
+            .clk_100MHz(clk_100MHz),
+            .reset(reset),
+            .btn(btn),         
+            .db_level(),  
+            .db_tick(btn_tick)
+        );
+    
+    // Signal Logic    
+    assign rec_data1 = rec_data + 1;    // add 1 to ascii value of received data (to transmit)
+    
+    // Output Logic
+    assign LED = rec_data;              // data byte received displayed on LEDs
+    assign an = 4'b1110;                // using only one 7 segment digit 
+    assign seg = {~rx_full, 2'b11, ~rx_empty, 3'b111};
+endmodule
+
+
+//UART TOP
+`timescale 1ns / 1ps
+//////////////////////////////////////////////////////////////////////////////////
+// Reference Book: FPGA Prototyping By Verilog Examples Xilinx Spartan-3 Version
+// Authored by: Dr. Pong P. Chu
+// Published by: Wiley
+//
+// Adapted for the Basys 3 Artix-7 FPGA by David J. Marion
+//
+// Top Module for the Complete UART System
+//
+// Setup for 9600 Baud Rate
+//
+// For 9600 baud with 100MHz FPGA clock: 
+// 9600 * 16 = 153,600
+// 100 * 10^6 / 153,600 = ~651      (counter limit M)
+// log2(651) = 10                   (counter bits N) 
+//
+// For 19,200 baud rate with a 100MHz FPGA clock signal:
+// 19,200 * 16 = 307,200
+// 100 * 10^6 / 307,200 = ~326      (counter limit M)
+// log2(326) = 9                    (counter bits N)
+//
+// For 115,200 baud with 100MHz FPGA clock:
+// 115,200 * 16 = 1,843,200
+// 100 * 10^6 / 1,843,200 = ~52     (counter limit M)
+// log2(52) = 6                     (counter bits N) 
+//
+// For 1500 baud with 100MHz FPGA clock:
+// 1500 * 16 = 24,000
+// 100 * 10^6 / 24,000 = ~4,167     (counter limit M)
+// log2(4167) = 13                  (counter bits N) 
+//
+// Comments:
+// - Many of the variable names have been changed for clarity
+//////////////////////////////////////////////////////////////////////////////////
+
+module uart_top
+    #(
+        parameter   DBITS = 8,          // number of data bits in a word
+                    SB_TICK = 16,       // number of stop bit / oversampling ticks
+                    BR_LIMIT = 651,     // baud rate generator counter limit
+                    BR_BITS = 10,       // number of baud rate generator counter bits
+                    FIFO_EXP = 2        // exponent for number of FIFO addresses (2^2 = 4)
+    )
+    (
+        input clk_100MHz,               // FPGA clock
+        input reset,                    // reset
+        input read_uart,                // button
+        input write_uart,               // button
+        input rx,                       // serial data in
+        input [DBITS-1:0] write_data,   // data from Tx FIFO
+        output rx_full,                 // do not write data to FIFO
+        output rx_empty,                // no data to read from FIFO
+        output tx,                      // serial data out
+        output [DBITS-1:0] read_data
+    );
+    
+    // Connection Signals
+    wire tick;                          // sample tick from baud rate generator
+    wire rx_done_tick;                  // data word received
+    wire tx_done_tick;                  // data transmission complete
+    wire tx_empty;                      // Tx FIFO has no data to transmit
+    wire tx_fifo_not_empty;             // Tx FIFO contains data to transmit
+    wire [DBITS-1:0] tx_fifo_out;       // from Tx FIFO to UART transmitter
+    wire [DBITS-1:0] rx_data_out;       // from UART receiver to Rx FIFO
+    
+
+    
+    // Instantiate Modules for UART Core
+    baud_rate_generator 
+        #(
+            .M(BR_LIMIT), 
+            .N(BR_BITS)
+         ) 
+        BAUD_RATE_GEN   
+        (
+            .clk_100MHz(clk_100MHz), 
+            .reset(reset),
+            .tick(tick)
+         );
+    
+    uart_receiver
+        #(
+            .DBITS(DBITS),
+            .SB_TICK(SB_TICK)
+         )
+         UART_RX_UNIT
+         (
+            .clk_100MHz(clk_100MHz),
+            .reset(reset),
+            .rx(rx),
+            .sample_tick(tick),
+            .data_ready(rx_done_tick),
+            .data_out(rx_data_out)
+         );
+    
+    uart_transmitter
+        #(
+            .DBITS(DBITS),
+            .SB_TICK(SB_TICK)
+         )
+         UART_TX_UNIT
+         (
+            .clk_100MHz(clk_100MHz),
+            .reset(reset),
+            .tx_start(tx_fifo_not_empty),
+            .sample_tick(tick),
+            .data_in(tx_fifo_out),
+            .tx_done(tx_done_tick),
+            .tx(tx)
+         );
+    
+    fifo
+        #(
+            .DATA_SIZE(DBITS),
+            .ADDR_SPACE_EXP(FIFO_EXP)
+         )
+         FIFO_RX_UNIT
+         (
+            .clk(clk_100MHz),
+            .reset(reset),
+            .write_to_fifo(rx_done_tick),
+	        .read_from_fifo(read_uart),
+	        .write_data_in(rx_data_out),
+	        .read_data_out(read_data),
+	        .empty(rx_empty),
+	        .full(rx_full)            
+	      );
+	   
+    fifo
+        #(
+            .DATA_SIZE(DBITS),
+            .ADDR_SPACE_EXP(FIFO_EXP)
+         )
+         FIFO_TX_UNIT
+         (
+            .clk(clk_100MHz),
+            .reset(reset),
+            .write_to_fifo(write_uart),
+	        .read_from_fifo(tx_done_tick),
+	        .write_data_in(write_data),
+	        .read_data_out(tx_fifo_out),
+	        .empty(tx_empty),
+	        .full()                // intentionally disconnected
+	      );
+    
+    // Signal Logic
+    assign tx_fifo_not_empty = ~tx_empty;
+  
+endmodule
+
+
+//BAUDRATE
+module baud_rate_generator
+    #(              // 9600 baud
+        parameter   N = 10,     // number of counter bits
+                    M = 651     // counter limit value
+    )
+    (
+        input clk_100MHz,       // basys 3 clock
+        input reset,            // reset
+        output tick             // sample tick
+    );
+    
+    // Counter Register
+    reg [N-1:0] counter;        // counter value
+    wire [N-1:0] next;          // next counter value
+    
+    // Register Logic
+    always @(posedge clk_100MHz, posedge reset)
+        if(reset)
+            counter <= 0;
+        else
+            counter <= next;
+            
+    // Next Counter Value Logic
+    assign next = (counter == (M-1)) ? 0 : counter + 1;
+    
+    // Output Logic
+    assign tick = (counter == (M-1)) ? 1'b1 : 1'b0;
+       
+endmodule
+
+
+//UART RX
+module uart_receiver
+    #(
+        parameter   DBITS = 8,          // number of data bits in a data word
+                    SB_TICK = 16        // number of stop bit / oversampling ticks (1 stop bit)
+    )
+    (
+        input clk_100MHz,               // basys 3 FPGA
+        input reset,                    // reset
+        input rx,                       // receiver data line
+        input sample_tick,              // sample tick from baud rate generator
+        output reg data_ready,          // signal when new data word is complete (received)
+        output [DBITS-1:0] data_out     // data to FIFO
+    );
+    
+    // State Machine States
+    localparam [1:0] idle  = 2'b00,
+                     start = 2'b01,
+                     data  = 2'b10,
+                     stop  = 2'b11;
+    
+    // Registers                 
+    reg [1:0] state, next_state;        // state registers
+    reg [3:0] tick_reg, tick_next;      // number of ticks received from baud rate generator
+    reg [2:0] nbits_reg, nbits_next;    // number of bits received in data state
+    reg [7:0] data_reg, data_next;      // reassembled data word
+    
+    // Register Logic
+    always @(posedge clk_100MHz, posedge reset)
+        if(reset) begin
+            state <= idle;
+            tick_reg <= 0;
+            nbits_reg <= 0;
+            data_reg <= 0;
+        end
+        else begin
+            state <= next_state;
+            tick_reg <= tick_next;
+            nbits_reg <= nbits_next;
+            data_reg <= data_next;
+        end        
+
+    // State Machine Logic
+    always @* begin
+        next_state = state;
+        data_ready = 1'b0;
+        tick_next = tick_reg;
+        nbits_next = nbits_reg;
+        data_next = data_reg;
+        
+        case(state)
+            idle:
+                if(~rx) begin               // when data line goes LOW (start condition)
+                    next_state = start;
+                    tick_next = 0;
+                end
+            start:
+                if(sample_tick)
+                    if(tick_reg == 7) begin
+                        next_state = data;
+                        tick_next = 0;
+                        nbits_next = 0;
+                    end
+                    else
+                        tick_next = tick_reg + 1;
+            data:
+                if(sample_tick)
+                    if(tick_reg == 15) begin
+                        tick_next = 0;
+                        data_next = {rx, data_reg[7:1]};
+                        if(nbits_reg == (DBITS-1))
+                            next_state = stop;
+                        else
+                            nbits_next = nbits_reg + 1;
+                    end
+                    else
+                        tick_next = tick_reg + 1;
+            stop:
+                if(sample_tick)
+                    if(tick_reg == (SB_TICK-1)) begin
+                        next_state = idle;
+                        data_ready = 1'b1;
+                    end
+                    else
+                        tick_next = tick_reg + 1;
+        endcase                    
+    end
+    
+    // Output Logic
+    assign data_out = data_reg;
+
+endmodule
+
+
+//UART TX
+module uart_transmitter
+    #(
+        parameter   DBITS = 8,          // number of data bits
+                    SB_TICK = 16        // number of stop bit / oversampling ticks (1 stop bit)
+    )
+    (
+        input clk_100MHz,               // basys 3 FPGA
+        input reset,                    // reset
+        input tx_start,                 // begin data transmission (FIFO NOT empty)
+        input sample_tick,              // from baud rate generator
+        input [DBITS-1:0] data_in,      // data word from FIFO
+        output reg tx_done,             // end of transmission
+        output tx                       // transmitter data line
+    );
+    
+    // State Machine States
+    localparam [1:0]    idle  = 2'b00,
+                        start = 2'b01,
+                        data  = 2'b10,
+                        stop  = 2'b11;
+    
+    // Registers                    
+    reg [1:0] state, next_state;            // state registers
+    reg [3:0] tick_reg, tick_next;          // number of ticks received from baud rate generator
+    reg [2:0] nbits_reg, nbits_next;        // number of bits transmitted in data state
+    reg [DBITS-1:0] data_reg, data_next;    // assembled data word to transmit serially
+    reg tx_reg, tx_next;                    // data filter for potential glitches
+    
+    // Register Logic
+    always @(posedge clk_100MHz, posedge reset)
+        if(reset) begin
+            state <= idle;
+            tick_reg <= 0;
+            nbits_reg <= 0;
+            data_reg <= 0;
+            tx_reg <= 1'b1;
+        end
+        else begin
+            state <= next_state;
+            tick_reg <= tick_next;
+            nbits_reg <= nbits_next;
+            data_reg <= data_next;
+            tx_reg <= tx_next;
+        end
+    
+    // State Machine Logic
+    always @* begin
+        next_state = state;
+        tx_done = 1'b0;
+        tick_next = tick_reg;
+        nbits_next = nbits_reg;
+        data_next = data_reg;
+        tx_next = tx_reg;
+        
+        case(state)
+            idle: begin                     // no data in FIFO
+                tx_next = 1'b1;             // transmit idle
+                if(tx_start) begin          // when FIFO is NOT empty
+                    next_state = start;
+                    tick_next = 0;
+                    data_next = data_in;
+                end
+            end
+            
+            start: begin
+                tx_next = 1'b0;             // start bit
+                if(sample_tick)
+                    if(tick_reg == 15) begin
+                        next_state = data;
+                        tick_next = 0;
+                        nbits_next = 0;
+                    end
+                    else
+                        tick_next = tick_reg + 1;
+            end
+            
+            data: begin
+                tx_next = data_reg[0];
+                if(sample_tick)
+                    if(tick_reg == 15) begin
+                        tick_next = 0;
+                        data_next = data_reg >> 1;
+                        if(nbits_reg == (DBITS-1))
+                            next_state = stop;
+                        else
+                            nbits_next = nbits_reg + 1;
+                    end
+                    else
+                        tick_next = tick_reg + 1;
+            end
+            
+            stop: begin
+                tx_next = 1'b1;         // back to idle
+                if(sample_tick)
+                    if(tick_reg == (SB_TICK-1)) begin
+                        next_state = idle;
+                        tx_done = 1'b1;
+                    end
+                    else
+                        tick_next = tick_reg + 1;
+            end
+        endcase    
+    end
+    
+    // Output Logic
+    assign tx = tx_reg;
+ 
+endmodule
+
+
+//FIFO
+module fifo
+	#(
+	   parameter	DATA_SIZE 	   = 8,	       // number of bits in a data word
+				    ADDR_SPACE_EXP = 4	       // number of address bits (2^4 = 16 addresses)
+	)
+	(
+	   input clk,                              // FPGA clock           
+	   input reset,                            // reset button
+	   input write_to_fifo,                    // signal start writing to FIFO
+	   input read_from_fifo,                   // signal start reading from FIFO
+	   input [DATA_SIZE-1:0] write_data_in,    // data word into FIFO
+	   output [DATA_SIZE-1:0] read_data_out,   // data word out of FIFO
+	   output empty,                           // FIFO is empty (no read)
+	   output full	                           // FIFO is full (no write)
+);
+
+	// signal declaration
+	reg [DATA_SIZE-1:0] memory [2**ADDR_SPACE_EXP-1:0];		// memory array register
+	reg [ADDR_SPACE_EXP-1:0] current_write_addr, current_write_addr_buff, next_write_addr;
+	reg [ADDR_SPACE_EXP-1:0] current_read_addr, current_read_addr_buff, next_read_addr;
+	reg fifo_full, fifo_empty, full_buff, empty_buff;
+	wire write_enabled;
+	
+	// register file (memory) write operation
+	always @(posedge clk)
+		if(write_enabled)
+			memory[current_write_addr] <= write_data_in;
+			
+	// register file (memory) read operation
+	assign read_data_out = memory[current_read_addr];
+	
+	// only allow write operation when FIFO is NOT full
+	assign write_enabled = write_to_fifo & ~fifo_full;
+	
+	// FIFO control logic
+	// register logic
+	always @(posedge clk or posedge reset)
+		if(reset) begin
+			current_write_addr 	<= 0;
+			current_read_addr 	<= 0;
+			fifo_full 			<= 1'b0;
+			fifo_empty 			<= 1'b1;       // FIFO is empty after reset
+		end
+		else begin
+			current_write_addr  <= current_write_addr_buff;
+			current_read_addr   <= current_read_addr_buff;
+			fifo_full  			<= full_buff;
+			fifo_empty 			<= empty_buff;
+		end
+
+	// next state logic for read and write address pointers
+	always @* begin
+		// successive pointer values
+		next_write_addr = current_write_addr + 1;
+		next_read_addr  = current_read_addr + 1;
+		
+		// default: keep old values
+		current_write_addr_buff = current_write_addr;
+		current_read_addr_buff  = current_read_addr;
+		full_buff  = fifo_full;
+		empty_buff = fifo_empty;
+		
+		// Button press logic
+		case({write_to_fifo, read_from_fifo})     // check both buttons
+			// 2'b00: neither buttons pressed, do nothing
+			
+			2'b01:	// read button pressed?
+				if(~fifo_empty) begin   // FIFO not empty
+					current_read_addr_buff = next_read_addr;
+					full_buff = 1'b0;   // after read, FIFO not full anymore
+					if(next_read_addr == current_write_addr)
+						empty_buff = 1'b1;
+				end
+			
+			2'b10:	// write button pressed?
+				if(~fifo_full) begin	// FIFO not full
+					current_write_addr_buff = next_write_addr;
+					empty_buff = 1'b0;  // after write, FIFO not empty anymore
+					if(next_write_addr == current_read_addr)
+						full_buff = 1'b1;
+				end
+				
+			2'b11:	begin	// write and read
+				current_write_addr_buff = next_write_addr;
+				current_read_addr_buff  = next_read_addr;
+				end
+		endcase			
+	end
+
+	// output
+	assign full = fifo_full;
+	assign empty = fifo_empty;
+
+endmodule
+
+
+//debounce
+module debounce_explicit(
+    input clk_100MHz,
+    input reset,
+    input btn,              // button input
+    output reg db_level,    // for switches
+    output reg db_tick      // for buttons
+    );
+    
+    // state declarations
+    parameter [1:0] zero  = 2'b00,
+                    wait0 = 2'b01,
+                    one   = 2'b10,
+                    wait1 = 2'b11;
+    
+    // Artix-7 has a 100MHz clk with a period of 10ns    
+    // number of counter bits (2^N * 10ns = ~40ms)
+    parameter N = 22;
+    
+    // signal declaration
+    reg [1:0] state_reg, next_state;
+    reg [N-1:0] q_reg;
+    wire [N-1:0] q_next;
+    wire q_zero;
+    reg q_load, q_dec;
+    
+    // body
+    // FSMD state and data registers
+    always @(posedge clk_100MHz or posedge reset) 
+        if(reset) begin
+            state_reg <= zero;
+            q_reg <= 0;
+        end
+        else begin
+            state_reg <= next_state;
+            q_reg <= q_next;
+        end
+        
+    // FSMD data path (counter) next state logic
+    assign q_next = (q_load) ? {N{1'b1}} :      // load all 1s
+                    (q_dec) ? q_reg - 1  :      // decrement
+                     q_reg;                     // no change in q
+    
+    // status signal
+    assign q_zero = (q_next == 0);
+    
+    // FSMD control path next state logic
+    always @* begin
+        next_state = state_reg;
+        q_load = 1'b0;
+        q_dec = 1'b0;
+        db_tick = 1'b0;
+        
+        case(state_reg)
+            zero    : begin
+                        db_level = 1'b0;
+                        if(btn) begin
+                            next_state = wait1;
+                            q_load = 1'b1;
+                        end
+            end
+            
+            wait1   : begin
+                        db_level = 1'b0;
+                        if(btn) begin
+                            q_dec = 1'b1;
+                            if(q_zero) begin
+                                next_state = one;
+                                db_tick = 1'b1;
+                            end
+                        end
+                        else
+                            next_state = zero;
+            end
+            
+            one     : begin
+                        db_level = 1'b1;
+                        if(~btn) begin
+                            q_dec = 1'b1;
+                            if(q_zero)
+                                next_state = zero;
+                        end
+                        else
+                            next_state = one;
+            end
+            
+            default : next_state = zero;
+        endcase
+    end
+        
+endmodule
+
+
+//constraint file
+# Clock signal
+set_property PACKAGE_PIN W5 [get_ports clk_100MHz]
+set_property IOSTANDARD LVCMOS33 [get_ports clk_100MHz]
+create_clock -period 10.000 -name sys_clk_pin -waveform {0.000 5.000} -add [get_ports clk_100MHz]
+
+# LEDs
+set_property PACKAGE_PIN U16 [get_ports {LED[0]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {LED[0]}]
+set_property PACKAGE_PIN E19 [get_ports {LED[1]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {LED[1]}]
+set_property PACKAGE_PIN U19 [get_ports {LED[2]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {LED[2]}]
+set_property PACKAGE_PIN V19 [get_ports {LED[3]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {LED[3]}]
+set_property PACKAGE_PIN W18 [get_ports {LED[4]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {LED[4]}]
+set_property PACKAGE_PIN U15 [get_ports {LED[5]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {LED[5]}]
+set_property PACKAGE_PIN U14 [get_ports {LED[6]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {LED[6]}]
+set_property PACKAGE_PIN V14 [get_ports {LED[7]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {LED[7]}]
+
+#7 segment display
+set_property PACKAGE_PIN W7 [get_ports {seg[0]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {seg[0]}]
+set_property PACKAGE_PIN W6 [get_ports {seg[1]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {seg[1]}]
+set_property PACKAGE_PIN U8 [get_ports {seg[2]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {seg[2]}]
+set_property PACKAGE_PIN V8 [get_ports {seg[3]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {seg[3]}]
+set_property PACKAGE_PIN U5 [get_ports {seg[4]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {seg[4]}]
+set_property PACKAGE_PIN V5 [get_ports {seg[5]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {seg[5]}]
+set_property PACKAGE_PIN U7 [get_ports {seg[6]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {seg[6]}]
+
+set_property PACKAGE_PIN U2 [get_ports {an[0]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {an[0]}]
+set_property PACKAGE_PIN U4 [get_ports {an[1]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {an[1]}]
+set_property PACKAGE_PIN V4 [get_ports {an[2]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {an[2]}]
+set_property PACKAGE_PIN W4 [get_ports {an[3]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {an[3]}]
+
+##Buttons
+## btnL
+set_property PACKAGE_PIN W19 [get_ports btn]
+set_property IOSTANDARD LVCMOS33 [get_ports btn]
+## btnR
+set_property PACKAGE_PIN T17 [get_ports reset]
+set_property IOSTANDARD LVCMOS33 [get_ports reset]
+
+##USB-RS232 Interface
+set_property PACKAGE_PIN B18 [get_ports rx]
+set_property IOSTANDARD LVCMOS33 [get_ports rx]
+set_property PACKAGE_PIN A18 [get_ports tx]
+set_property IOSTANDARD LVCMOS33 [get_ports tx]
+
+set_property IOSTANDARD LVCMOS33 [get_ports PMOD_2]
+set_property IOSTANDARD LVCMOS33 [get_ports PMOD_3]
+set_property IOSTANDARD LVCMOS33 [get_ports PMOD_8]
+set_property PACKAGE_PIN A16 [get_ports PMOD_2]
+set_property PACKAGE_PIN B15 [get_ports PMOD_3]
+set_property PACKAGE_PIN A17 [get_ports PMOD_8]
+ASIC2.txt
+Displaying ASIC2.txt.
